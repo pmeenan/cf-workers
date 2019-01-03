@@ -1,3 +1,15 @@
+// Enabled optimization features
+ENABLE_PROXY_THIRD_PARTY = true;
+ENABLE_GOOGLE_FONTS = true;
+ENABLE_EDGE_CACHE = true;
+
+// API settings if KV isn't being used for EDGE_CACHE (otherwise the EDGE_CACHE variable needs to be bound to a KV namespace for this worker)
+const CLOUDFLARE_API = {
+  email: "", // From https://dash.cloudflare.com/profile
+  key: "",   // Global API Key from https://dash.cloudflare.com/profile
+  zone: ""   // "Zone ID" from the API section of the dashboard overview page https://dash.cloudflare.com/
+};
+
 /******************************************************************************
  *  Main control flow
  *****************************************************************************/
@@ -86,8 +98,10 @@ const SCRIPT_URLS = [
 async function modifyHtmlChunk(content, request, event, cspRules) {
 
   // Call out to the individual optimizations
-  content = await optimizeGoogleFonts(content, request, event, cspRules);
-  content = await proxyScripts(content, request);
+  if (ENABLE_GOOGLE_FONTS)
+    content = await optimizeGoogleFonts(content, request, event, cspRules);
+  if (ENABLE_PROXY_THIRD_PARTY)
+    content = await proxyScripts(content, request);
 
   return content;
 }
@@ -102,9 +116,9 @@ async function modifyHtmlChunk(content, request, event, cspRules) {
  */
 function isProxyRequest(url) {
   let needsProxy = false;
-  if (url.pathname.startsWith('/fonts.gstatic.com/')) {
+  if (ENABLE_GOOGLE_FONTS && url.pathname.startsWith('/fonts.gstatic.com/')) {
     needsProxy = true;
-  } else {
+  } else if (ENABLE_PROXY_THIRD_PARTY) {
     const path = url.pathname + url.search;
     for (let prefix of SCRIPT_URLS) {
       if (path.startsWith(prefix)) {
@@ -123,17 +137,310 @@ function isProxyRequest(url) {
  * @param {*} event - Original worker event
  */
 async function processRequest(request, event) {
-  const response = await fetch(request);
+  let response = null;
+  if (isEdgeCacheEnabled(request)) {
+    response = await edgeCacheFetch(request, event);
+  } else {
+    response = await fetch(request);
+  }
   if (response && response.status === 200) {
     const contentType = response.headers.get("content-type");
-    if (contentType && contentType.indexOf("text/html") !== -1) {
+    if ((ENABLE_GOOGLE_FONTS || ENABLE_PROXY_THIRD_PARTY) && contentType && contentType.indexOf("text/html") !== -1) {
       return await processHtmlResponse(response, event.request, event);
-    } else if (contentType && contentType.indexOf("text/css") !== -1) {
+    } else if (ENABLE_GOOGLE_FONTS && contentType && contentType.indexOf("text/css") !== -1) {
       return await processStylesheetResponse(response, event.request, event);
     }
   }
 
   return response;
+}
+
+/******************************************************************************
+ *  HTML Edge Cache
+ *****************************************************************************/
+
+ /**
+  * See if the edge cache is enabled and should be used
+  * @param {Request} request - Original request
+  * @returns {bool} true if edge caching is enabled
+  */
+ function isEdgeCacheEnabled(request) {
+  let enabled = ENABLE_EDGE_CACHE;
+
+  // Disable if there is a cache in front of us
+  if (request.headers.get('x-HTML-Edge-Cache') !== null) {
+    return false;
+  }
+
+  // Disable if KV isn't enabled or if the API key isn't configured
+  if (typeof EDGE_CACHE !== 'undefined') {
+    return enabled;
+  }
+  if (CLOUDFLARE_API.email.length && CLOUDFLARE_API.key.length && CLOUDFLARE_API.zone.length) {
+    return enabled;
+  }
+
+  return false;
+}
+
+/**
+ * Fetch from the edge cache if available. If not, fetch from the origin and cache if requested.
+ * @param {Request} originalRequest - Original request
+ * @param {Event} event - original event
+ */
+async function edgeCacheFetch(originalRequest, event) {
+  let {response, cacheVer, status, bypassCache} = await getEdgeCachedResponse(originalRequest);
+
+  if (response === null) {
+    // Clone the request, add the edge-cache header and send it through.
+    let request = new Request(originalRequest);
+    request.headers.set('x-HTML-Edge-Cache', 'supports=cache|purgeall|bypass-cookies');
+    response = await fetch(request);
+
+    if (response) {
+      const options = getEdgeCacheResponseOptions(response);
+      if (options.purge) {
+        await purgeEdgeCache(cacheVer, event);
+        status += ', Purged';
+      }
+      if (options.cache && !bypassCache) {
+        status += await cacheEdgeResponse(cacheVer, originalRequest, response, event);
+      }
+    }
+  }
+
+  const accept = originalRequest.headers.get('Accept');
+  if (response && status !== null && originalRequest.method === 'GET' && response.status === 200 && accept && accept.indexOf('text/html') >= 0) {
+    response = new Response(response.body, response);
+    response.headers.set('x-HTML-Edge-Cache-Status', status);
+    if (cacheVer !== null) {
+      response.headers.set('x-HTML-Edge-Cache-Version', cacheVer.toString());
+    }
+  }
+
+  return response;
+}
+
+const CACHE_HEADERS = ['Cache-Control', 'Expires', 'Pragma'];
+
+/**
+ * Check for cached HTML GET requests.
+ * 
+ * @param {Request} request - Original request
+ */
+async function getEdgeCachedResponse(request) {
+  let response = null;
+  let cacheVer = null;
+  let bypassCache = false;
+  let status = 'Miss';
+
+  // Only check for HTML GET requests (saves on reading from KV unnecessarily)
+  // and not when there are cache-control headers on the request (refresh)
+  const accept = request.headers.get('Accept');
+  const cacheControl = request.headers.get('Cache-Control');
+  if (cacheControl === null && request.method === 'GET' && accept && accept.indexOf('text/html') >= 0) {
+    // Build the versioned URL for checking the cache
+    cacheVer = await GetCurrentEdgeCacheVersion(cacheVer);
+    const cacheKeyRequest = GenerateEdgeCacheRequest(request, cacheVer);
+
+    // See if there is a request match in the cache
+    try {
+      let cache = caches.default;
+      let cachedResponse = await cache.match(cacheKeyRequest);
+      if (cachedResponse) {
+        // Copy Response object so that we can edit headers.
+        cachedResponse = new Response(cachedResponse.body, cachedResponse);
+
+        // Check to see if the response needs to be skipped for a login cookie.
+        const options = getEdgeCacheResponseOptions(cachedResponse);
+        const cookieHeader = request.headers.get('cookie');
+        if (cookieHeader && cookieHeader.length && options.bypassCookies.length) {
+          const cookies = cookieHeader.split(';');
+          for (let cookie of cookies) {
+            // See if the cookie starts with any of the logged-in user prefixes
+            for (let prefix of options.bypassCookies) {
+              if (cookie.trim().startsWith(prefix)) {
+                bypassCache = true;
+                break;
+              }
+            }
+            if (bypassCache) {
+              break;
+            }
+          }
+        }
+      
+        // Copy the original cache headers back and clean up any control headers
+        if (bypassCache) {
+          status = 'Bypass Cookie';
+        } else {
+          status = 'Hit';
+          response = cachedResponse;
+          response.headers.delete('x-HTML-Edge-Cache');
+          response.headers.delete('Cache-Control');
+          for (header of CACHE_HEADERS) {
+            let value = response.headers.get('x-HTML-Edge-Cache-' + header);
+            if (value) {
+              response.headers.delete('x-HTML-Edge-Cache-' + header);
+              response.headers.set(header, value);
+            }
+          }
+        }
+      } else {
+        status = 'Miss';
+      }
+    } catch (err) {
+      // Send the exception back in the response header for debugging
+      status = "Cache Read Exception: " + err.message;
+    }
+  }
+
+  return {response, cacheVer, status, bypassCache};
+}
+
+/**
+ * Asynchronously purge the HTML cache.
+ * @param {Int} cacheVer - Current cache version (if retrieved)
+ * @param {Event} event - Original event
+ */
+async function purgeEdgeCache(cacheVer, event) {
+  if (typeof EDGE_CACHE !== 'undefined') {
+    // Purge the KV cache by bumping the version number
+    cacheVer = await GetCurrentEdgeCacheVersion(cacheVer);
+    cacheVer++;
+    event.waitUntil(EDGE_CACHE.put('html_cache_version', cacheVer.toString()));
+  } else {
+    // Purge everything using the API
+    const url = "https://api.cloudflare.com/client/v4/zones/" + CLOUDFLARE_API.zone + "/purge_cache";
+    event.waitUntil(fetch(url,{
+      method: 'POST',
+      headers: {'X-Auth-Email': CLOUDFLARE_API.email,
+                'X-Auth-Key': CLOUDFLARE_API.key,
+                'Content-Type': 'application/json'},
+      body: JSON.stringify({purge_everything: true})
+    }));
+  }
+}
+
+/**
+ * Cache the returned content (but only if it was a successful GET request)
+ * 
+ * @param {Int} cacheVer - Current cache version (if already retrieved)
+ * @param {Request} request - Original Request
+ * @param {Response} originalResponse - Response to (maybe) cache
+ * @param {Event} event - Original event
+ * @returns {bool} true if the response was cached
+ */
+async function cacheEdgeResponse(cacheVer, request, originalResponse, event) {
+  let status = "";
+  const accept = request.headers.get('Accept');
+  if (request.method === 'GET' && originalResponse.status === 200 && accept && accept.indexOf('text/html') >= 0) {
+    cacheVer = await GetCurrentEdgeCacheVersion(cacheVer);
+    const cacheKeyRequest = GenerateEdgeCacheRequest(request, cacheVer);
+
+    try {
+      // Move the cache headers out of the way so the response can actually be cached.
+      // First clone the response so there is a parallel body stream and then
+      // create a new response object based on the clone that we can edit.
+      let cache = caches.default;
+      let clonedResponse = originalResponse.clone();
+      let response = new Response(clonedResponse.body, clonedResponse);
+      for (header of CACHE_HEADERS) {
+        let value = response.headers.get(header);
+        if (value) {
+          response.headers.delete(header);
+          response.headers.set('x-HTML-Edge-Cache-' + header, value);
+        }
+      }
+      response.headers.delete('Set-Cookie');
+      response.headers.set('Cache-Control', 'public; max-age=315360000');
+      event.waitUntil(cache.put(cacheKeyRequest, response));
+      status = ", Cached";
+    } catch (err) {
+      // Send the exception back in the response header for debugging
+      status = ", Cache Write Exception: " + err.message;
+    }
+  }
+  return status;
+}
+
+/**
+ * Parse the commands from the x-HTML-Edge-Cache response header.
+ * @param {Response} response - HTTP response from the origin.
+ * @returns {*} Parsed commands
+ */
+function getEdgeCacheResponseOptions(response) {
+  let options = {
+    purge: false,
+    cache: false,
+    bypassCookies: []
+  };
+
+  let header = response.headers.get('x-HTML-Edge-Cache');
+  if (header) {
+    let commands = header.split(',');
+    for (let command of commands) {
+      if (command.trim() === 'purgeall') {
+        options.purge = true;
+      } else if (command.trim() === 'cache') {
+        options.cache = true;
+      } else if (command.trim().startsWith('bypass-cookies')) {
+        let separator = command.indexOf('=');
+        if (separator >= 0) {
+          let cookies = command.substr(separator + 1).split('|');
+          for (let cookie of cookies) {
+            cookie = cookie.trim();
+            if (cookie.length) {
+              options.bypassCookies.push(cookie);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  return options;
+}
+
+/**
+ * Retrieve the current cache version from KV
+ * @param {Int} cacheVer - Current cache version value if set.
+ * @returns {Int} The current cache version.
+ */
+async function GetCurrentEdgeCacheVersion(cacheVer) {
+  if (cacheVer === null) {
+    if (typeof EDGE_CACHE !== 'undefined') {
+      cacheVer = await EDGE_CACHE.get('html_cache_version');
+      if (cacheVer === null) {
+        // Uninitialized - first time through, initialize KV with a value
+        // Blocking but should only happen immediately after worker activation.
+        cacheVer = 0;
+        await EDGE_CACHE.put('html_cache_version', cacheVer.toString());
+      } else {
+        cacheVer = parseInt(cacheVer);
+      }
+    } else {
+      cacheVer = -1;
+    }
+  }
+  return cacheVer;
+}
+
+/**
+ * Generate the versioned Request object to use for cache operations.
+ * @param {Request} request - Base request
+ * @param {Int} cacheVer - Current Cache version (must be set)
+ * @returns {Request} Versioned request object
+ */
+function GenerateEdgeCacheRequest(request, cacheVer) {
+  let cacheUrl = request.url;
+  if (cacheUrl.indexOf('?') >= 0) {
+    cacheUrl += '&';
+  } else {
+    cacheUrl += '?';
+  }
+  cacheUrl += 'cf_edge_cache_ver=' + cacheVer;
+  return new Request(cacheUrl);
 }
 
 /******************************************************************************
