@@ -469,7 +469,6 @@ async function proxyScripts(content, request) {
   for (let pattern of patterns) {
     let match = pattern.exec(content);
     while (match !== null) {
-      console.log(match[0]);
       const originalUrl = match[1];
       let fetchUrl = originalUrl;
       if (fetchUrl.startsWith('//')) {

@@ -470,7 +470,6 @@ async function proxyScripts(content, request) {
   for (let pattern of patterns) {
     let match = pattern.exec(content);
     while (match !== null) {
-      console.log(match[0]);
       const originalUrl = match[1];
       let fetchUrl = originalUrl;
       if (fetchUrl.startsWith('//')) {
@@ -971,7 +970,6 @@ async function processHtmlResponse(response, request, event) {
   try {
     let decoder = new TextDecoder("utf-8", {fatal: true});
     content = decoder.decode(contentArray);
-    console.log(content);
     content = await modifyHtmlResponse(content, request, event, cspRules);
   } catch (e) {
     // Ignore the exception
