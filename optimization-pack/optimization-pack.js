@@ -36,7 +36,7 @@ addEventListener("fetch", event => {
       // Proxy the Google fonts stylesheet for pages using CSP
       // (Separate because it rewrites the font URLs).
       event.respondWith(proxyStylesheet('https:/' + url.pathname + url.search,
-                                        event.request));
+                                        event.request, event));
     } else {
       event.respondWith(processRequest(event.request, event));
     }
@@ -689,9 +689,10 @@ async function processStylesheetResponse(response, request, event) {
  * 
  * @param {*} url The URL to proxy
  * @param {*} request The original request (to copy parameters from)
+ * @param {Event} event - The original event
  */
-async function proxyStylesheet(url, request) {
-  let css = await fetchGoogleFontsCSS(url, request)
+async function proxyStylesheet(url, request, event) {
+  let css = await fetchGoogleFontsCSS(url, request, event);
   if (css) {
     const responseInit = {headers: {
       "Content-Type": "text/css; charset=utf-8",
