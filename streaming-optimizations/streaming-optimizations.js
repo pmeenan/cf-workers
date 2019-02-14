@@ -61,9 +61,12 @@ const SCRIPT_URLS = [
   '/netdna.bootstrapcdn.com/',
   '/oss.maxcdn.com/',
   '/stackpath.bootstrapcdn.com/',
+  '/use.fontawesome.com/',
 
   // Popular scripts (can be site-specific)
   '/a.optmnstr.com/app/js/',
+  '/apis.google.com/js/',
+  '/bat.bing.com/',
   '/cdn.onesignal.com/sdks/',
   '/cdn.optimizely.com/',
   '/cdn.polyfill.io/',
@@ -85,6 +88,24 @@ const SCRIPT_URLS = [
   '/www.googletagmanager.com/gtag/js',
   '/www.googletagmanager.com/gtm.js',
   '/www.googletagservices.com/tag/js/gpt.js'
+];
+
+// Third-party stylesheet URL prefixes to proxy and cache-extend
+const STYLESHEET_URLS = [
+  // Hosted libraries (usually CDN's for open source).
+  '/ajax.aspnetcdn.com/',
+  '/ajax.cloudflare.com/',
+  '/ajax.googleapis.com/',
+  '/cdn.jsdelivr.net/',
+  '/cdnjs.com/',
+  '/cdnjs.cloudflare.com/',
+  '/code.jquery.com/',
+  '/fonts.googleapis.com/',
+  '/maxcdn.bootstrapcdn.com/',
+  '/netdna.bootstrapcdn.com/',
+  '/oss.maxcdn.com/',
+  '/stackpath.bootstrapcdn.com/',
+  '/use.fontawesome.com/'
 ];
 
 /**
@@ -124,6 +145,14 @@ function isProxyRequest(url) {
       if (path.startsWith(prefix)) {
         needsProxy = true;
         break;
+      }
+    }
+    if (!needsProxy) {
+      for (let prefix of STYLESHEET_URLS) {
+        if (path.startsWith(prefix)) {
+          needsProxy = true;
+          break;
+        }
       }
     }
   }
@@ -444,7 +473,7 @@ function GenerateEdgeCacheRequest(request, cacheVer) {
 }
 
 /******************************************************************************
- *  Proxy static 3rd-party scripts
+ *  Proxy static 3rd-party scripts and stylesheets
  *****************************************************************************/
 
  /**
@@ -455,6 +484,7 @@ function GenerateEdgeCacheRequest(request, cacheVer) {
 async function proxyScripts(content, request) {
   // Regex patterns for matching script tags
   const SCRIPT_PRE = '<\\s*script[^>]+src\\s*=\\s*[\'"]\\s*((https?:)?/';
+  const CSS_PRE = '<\\s*link[^>]+href\\s*=\\s*[\'"]\\s*((https?:)?/';
   const PATTERN_POST = '[^\'" ]+)\\s*["\'][^>]*>';
 
   // build the list of url patterns we are going to look for.
@@ -463,25 +493,77 @@ async function proxyScripts(content, request) {
     let regex = new RegExp(SCRIPT_PRE + scriptUrl + PATTERN_POST, 'gi');
     patterns.push(regex);
   }
+  for (let stylesheetUrl of STYLESHEET_URLS) {
+    let regex = new RegExp(CSS_PRE + stylesheetUrl + PATTERN_POST, 'gi');
+    patterns.push(regex);
+  }
 
-  // Rewrite the script URLs
+  // Rewrite the script and stylesheet URLs
+  const stylesheetRegex = new RegExp('rel\\s*=\\s*[\'"]\\s*stylesheet\\s*[\'"]', 'gi');
   const pageUrl = new URL(request.url);
   for (let pattern of patterns) {
     let match = pattern.exec(content);
     while (match !== null) {
-      const originalUrl = match[1];
-      let fetchUrl = originalUrl;
-      if (fetchUrl.startsWith('//')) {
-        fetchUrl = pageUrl.protocol + fetchUrl;
+      // Make sure any link tags are stylesheets
+      let ok = true;
+      if (pattern.source.indexOf('link') >= 0) {
+        stylesheetRegex.lastIndex = 0;
+        ok = stylesheetRegex.test(match[0]);
       }
-      const proxyUrl = await hashContent(originalUrl, fetchUrl, request);
-      if (proxyUrl !== null) {
-        content = content.split(originalUrl).join(proxyUrl);
+      if (ok) {
+        const originalUrl = match[1];
+        let fetchUrl = originalUrl;
+        if (fetchUrl.startsWith('//')) {
+          fetchUrl = pageUrl.protocol + fetchUrl;
+        }
+        const proxyUrl = await hashContent(originalUrl, fetchUrl, request);
+        if (proxyUrl !== null) {
+          content = content.split(originalUrl).join(proxyUrl);
+        }
       }
       match = pattern.exec(content);
     }
   }
 
+  return content;
+}
+
+/**
+ * Rewrite the URLs in the stylesheet to proxy through the same origin
+ * @param {String} url - URL for the CSS
+ * @param {String} content - Original CSS
+ * @returns {String} The rewritten CSS
+ */
+function rewriteStylesheetUrls(url, content) {
+  const patterns = [
+    '@import\\s*[\'"]\\s*((https?:)?\\/[^\'" ;]*)\\s*[\'"]',
+    '@import\\s*((https?:)?\\/[^\\s\'"\(]*)\\s*;',
+    'url\\s*\\(\\s*[\'"]?\\s*((https?:)?\\/[^\'" ]*)\\s*[\'"]?\\s*\\)'
+  ];
+  const cssUrl = new URL(url);
+  for (let pattern of patterns) {
+    let regex = new RegExp(pattern, 'gi');
+    let match = regex.exec(content);
+    while (match !== null) {
+      const originalUrl = match[1];
+      let proxyUrl = null;
+      // only operate on absolute urls
+      if (originalUrl.startsWith('//')) {
+        proxyUrl = originalUrl.substr(1);
+      } else if (originalUrl.startsWith('/')) {
+        proxyUrl = '/' + cssUrl.hostname + originalUrl;
+      } else {
+        let offset = originalUrl.indexOf('://');
+        if (offset >= 0) {
+          proxyUrl = originalUrl.substr(offset + 2);
+        }
+      }
+      if (proxyUrl !== null) {
+        content = content.split(originalUrl).join(proxyUrl);
+      }
+      match = regex.exec(content);
+    }
+  }
   return content;
 }
 
@@ -496,12 +578,14 @@ function constructProxyUrl(originalUrl, hash) {
   let pathStart = originalUrl.indexOf('//');
   if (pathStart >= 0) {
     proxyUrl = originalUrl.substring(pathStart + 1);
-    if (proxyUrl.indexOf('?') >= 0) {
-      proxyUrl += '&';
-    } else {
-      proxyUrl += '?';
+    if (hash !== null) {
+      if (proxyUrl.indexOf('?') >= 0) {
+        proxyUrl += '&';
+      } else {
+        proxyUrl += '?';
+      }
+      proxyUrl += 'cf_hash=' + hash;
     }
-    proxyUrl += 'cf_hash=' + hash;
   }
   return proxyUrl;
 }
@@ -517,7 +601,7 @@ function constructProxyUrl(originalUrl, hash) {
  * @param {*} event - Worker event object.
  */
 async function hashContent(originalUrl, url, request) {
-  let proxyUrl = null;
+  let proxyUrl = constructProxyUrl(originalUrl, null);
   let hash = null;
   const userAgent = request.headers.get('user-agent');
   const clientAddr = request.headers.get('cf-connecting-ip');
@@ -732,7 +816,7 @@ async function fetchGoogleFontsCSS(url, request, event) {
     cache = caches.default;
     let response = await cache.match(cacheKeyRequest);
     if (response) {
-      fontCSS = response.text();
+      fontCSS = await response.text();
       foundInCache = true;
     }
   } catch(e) {
@@ -899,7 +983,19 @@ async function proxyRequest(url, request) {
     // Add a little bit of protection to the proxied content type
     responseInit.headers['X-Content-Type-Options'] = "nosniff";
 
-    const newResponse = new Response(response.body, responseInit);
+    // Rewrite URLs in stylesheets
+    let body = response.body;
+    const contentType = response.headers.get("content-type");
+    if (contentType && contentType.indexOf("text/css") !== -1) {
+      try {
+        let content = await response.text();
+        body = rewriteStylesheetUrls(url, content);
+      } catch (e) {
+        // ignore the exception
+      }
+    }
+
+    const newResponse = new Response(body, responseInit);
     return newResponse;
   }
 
