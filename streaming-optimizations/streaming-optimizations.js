@@ -552,7 +552,7 @@ function rewriteStylesheetUrls(url, content) {
         proxyUrl = originalUrl.substr(1);
       } else if (originalUrl.startsWith('/')) {
         proxyUrl = '/' + cssUrl.hostname + originalUrl;
-      } else {
+      } else if (originalUrl.indexOf(cssUrl.hostname) === -1) {
         let offset = originalUrl.indexOf('://');
         if (offset >= 0) {
           proxyUrl = originalUrl.substr(offset + 2);
