@@ -1,0 +1,35 @@
+{
+  "manifest_version": 2,
+  "name": "overrideHost Proxy",
+  "version": "0.1",
+
+  "description": "Mimics WebPageTest's overrideHost command for local testing. Rewrite all requests to a different host while adding an x-Host header.",
+
+  "icons": { "16": "enabled/16.png",
+             "24": "enabled/24.png",
+             "32": "enabled/32.png",
+             "48": "enabled/48.png",
+             "64": "enabled/64.png",
+             "128": "enabled/128.png" },
+
+  "background": {
+    "persistent": false,
+    "scripts": ["background.js"]
+  },
+  "browser_action": {
+    "default_icon": {
+      "16": "disabled/16.png",
+      "24": "disabled/24.png",
+      "32": "disabled/32.png",
+      "48": "disabled/48.png",
+      "64": "disabled/64.png",
+      "128": "disabled/128.png"
+    },
+    "default_title": "x-Host Proxy: click to enable, right-click to configure."
+  },
+  "permissions": ["tabs",
+                  "debugger",
+                  "http://*/*",
+                  "https://*/*"
+                 ]
+}
