@@ -90,6 +90,7 @@ function rewriteUrls(content, originalDomain, proxyOrigin, regex, group) {
         console.log("Replacing: " + matchStr);
         console.log("     With: " + newStr);
         content = content.split(matchStr).join(newStr);
+        regex.lastIndex -= matchStr.length - newStr.length;
       }
     }
     match = regex.exec(content);

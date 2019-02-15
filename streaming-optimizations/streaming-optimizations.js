@@ -519,6 +519,7 @@ async function proxyScripts(content, request) {
         const proxyUrl = await hashContent(originalUrl, fetchUrl, request);
         if (proxyUrl !== null) {
           content = content.split(originalUrl).join(proxyUrl);
+          pattern.lastIndex -= originalUrl.length - proxyUrl.length;
         }
       }
       match = pattern.exec(content);
@@ -560,6 +561,7 @@ function rewriteStylesheetUrls(url, content) {
       }
       if (proxyUrl !== null) {
         content = content.split(originalUrl).join(proxyUrl);
+        regex.lastIndex -= originalUrl.length - proxyUrl.length;
       }
       match = regex.exec(content);
     }
@@ -717,6 +719,7 @@ async function optimizeGoogleFonts(content, request, event, cspRules) {
             cssString += fontCSS;
             cssString += "\n</style>\n";
             content = content.split(matchString).join(cssString);
+            fontCSSRegex.lastIndex -= matchString.length - cssString.length;
           }
         } else {
           // Rewrite the URL to proxy it through the origin
@@ -725,6 +728,7 @@ async function optimizeGoogleFonts(content, request, event, cspRules) {
           let newUrl = originalUrl.substr(startPos);
           let newString = matchString.split(originalUrl).join(newUrl);
           content = content.split(matchString).join(newString);
+          fontCSSRegex.lastIndex -= matchString.length - newString.length;
         }
         match = fontCSSRegex.exec(content);
       }
@@ -752,6 +756,7 @@ async function processStylesheetResponse(response, request, event) {
       const fontCSS = await fetchGoogleFontsCSS(match[2], request, event);
       if (fontCSS.length) {
         body = body.split(matchString).join(fontCSS);
+        fontCSSRegex.lastIndex -= matchString.length - fontCSS.length;
       }
       match = fontCSSRegex.exec(body);
     }
