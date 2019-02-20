@@ -25,10 +25,10 @@ addEventListener("fetch", event => {
   event.passThroughOnException();
   const accept = event.request.headers.get('Accept');
   let isImage = false;
-  if (accept && (accept.indexOf('image/*') !== -1 || accept.indexOf('image/webp') !== -1)) {
+  if (accept && accept.indexOf('image/*') !== -1) {
     isImage = true;
   }
-  // Bypass processing for image requests
+  // Bypass processing for image requests (for most browsers, Firefox doesn't include image/* on the accept)
   if (!isImage) {
     const url = new URL(event.request.url);
     if (event.request.method === 'GET' && isProxyRequest(url)) {
