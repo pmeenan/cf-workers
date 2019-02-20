@@ -23,13 +23,21 @@ const CLOUDFLARE_API = {
 addEventListener("fetch", event => {
   // Fail-safe in case of an unhandled exception
   event.passThroughOnException();
-  const url = new URL(event.request.url);
-  if (event.request.method === 'GET' && isProxyRequest(url)) {
-    // Pass the requests through to the origin server
-    // (through the underlying request cache and filtering headers).
-    event.respondWith(proxyRequest('https:/' + url.pathname + url.search, csp.request));
-  } else {
-    event.respondWith(processRequest(event.request, event));
+  const accept = event.request.headers.get('Accept');
+  let isImage = false;
+  if (accept && (accept.indexOf('image/*') !== -1 || accept.indexOf('image/webp') !== -1)) {
+    isImage = true;
+  }
+  // Bypass processing for image requests
+  if (!isImage) {
+    const url = new URL(event.request.url);
+    if (event.request.method === 'GET' && isProxyRequest(url)) {
+      // Pass the requests through to the origin server
+      // (through the underlying request cache and filtering headers).
+      event.respondWith(proxyRequest('https:/' + url.pathname + url.search, csp.request));
+    } else {
+      event.respondWith(processRequest(event.request, event));
+    }
   }
 });
 
