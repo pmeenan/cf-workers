@@ -24,22 +24,12 @@ addEventListener("fetch", event => {
   // Fail-safe in case of an unhandled exception
   event.passThroughOnException();
   const url = new URL(event.request.url);
-  const bypass = url.searchParams.get('cf-worker') === 'bypass';
-  if (!bypass) {
-    if (event.request.method === 'GET' && isProxyRequest(url)) {
-      // Pass the requests through to the origin server
-      // (through the underlying request cache and filtering headers).
-      event.respondWith(proxyRequest('https:/' + url.pathname + url.search,
-                                     event.request));
-    } else if (event.request.method === 'GET' &&
-               url.pathname.startsWith('/fonts.googleapis.com/')) {
-      // Proxy the Google fonts stylesheet for pages using CSP
-      // (Separate because it rewrites the font URLs).
-      event.respondWith(proxyStylesheet('https:/' + url.pathname + url.search,
-                                        event.request, event));
-    } else {
-      event.respondWith(processRequest(event.request, event));
-    }
+  if (event.request.method === 'GET' && isProxyRequest(url)) {
+    // Pass the requests through to the origin server
+    // (through the underlying request cache and filtering headers).
+    event.respondWith(proxyRequest('https:/' + url.pathname + url.search, event.request));
+  } else {
+    event.respondWith(processRequest(event.request, event));
   }
 });
 
@@ -122,7 +112,7 @@ async function modifyHtmlResponse(content, request, event, cspRules) {
   if (ENABLE_GOOGLE_FONTS)
     content = await optimizeGoogleFonts(content, request, event, cspRules);
   if (ENABLE_PROXY_THIRD_PARTY)
-    content = await proxyScripts(content, request);
+    content = await proxyScripts(content, request, cspRules);
 
   return content;
 }
@@ -268,7 +258,12 @@ async function getEdgeCachedResponse(request) {
   // and not when there are cache-control headers on the request (refresh)
   const accept = request.headers.get('Accept');
   const cacheControl = request.headers.get('Cache-Control');
-  if (cacheControl === null && request.method === 'GET' && accept && accept.indexOf('text/html') >= 0) {
+  let noCache = false;
+  if (cacheControl && cacheControl.indexOf('no-cache') !== -1) {
+    noCache = true;
+    status = 'Bypass for Reload';
+  }
+  if (!noCache && request.method === 'GET' && accept && accept.indexOf('text/html') >= 0) {
     // Build the versioned URL for checking the cache
     cacheVer = await GetCurrentEdgeCacheVersion(cacheVer);
     const cacheKeyRequest = GenerateEdgeCacheRequest(request, cacheVer);
@@ -481,6 +476,7 @@ function GenerateEdgeCacheRequest(request, cacheVer) {
  * Change proxy well-known 3rd-party scripts through our origin
  * @param {*} content - Text chunk from the streaming HTML
  * @param {*} request - Original request object for downstream use.
+ * @param {*} cspRules - Content-Security-Policy rules
  */
 async function proxyScripts(content, request) {
   // Regex patterns for matching script tags
@@ -490,13 +486,17 @@ async function proxyScripts(content, request) {
 
   // build the list of url patterns we are going to look for.
   let patterns = [];
-  for (let scriptUrl of SCRIPT_URLS) {
-    let regex = new RegExp(SCRIPT_PRE + scriptUrl + PATTERN_POST, 'gi');
-    patterns.push(regex);
+  if (!('script' in cspRules) || cspRules['script'].indexOf("'self'") >= 0) {
+    for (let scriptUrl of SCRIPT_URLS) {
+      let regex = new RegExp(SCRIPT_PRE + scriptUrl + PATTERN_POST, 'gi');
+      patterns.push(regex);
+    }
   }
-  for (let stylesheetUrl of STYLESHEET_URLS) {
-    let regex = new RegExp(CSS_PRE + stylesheetUrl + PATTERN_POST, 'gi');
-    patterns.push(regex);
+  if (!('style' in cspRules) || cspRules['style'].indexOf("'self'") >= 0) {
+    for (let stylesheetUrl of STYLESHEET_URLS) {
+      let regex = new RegExp(CSS_PRE + stylesheetUrl + PATTERN_POST, 'gi');
+      patterns.push(regex);
+    }
   }
 
   // Rewrite the script and stylesheet URLs
@@ -693,7 +693,7 @@ function hex(buffer) {
  * @param {*} content - Text chunk from the streaming HTML (or accumulated head)
  * @param {*} request - Original request object for downstream use.
  * @param {*} event - Worker event object
- * @param {bool} cspRules - Content-Security-Policy rules
+ * @param {*} cspRules - Content-Security-Policy rules
 */
 async function optimizeGoogleFonts(content, request, event, cspRules) {
   if (!('style' in cspRules) || cspRules['style'].indexOf("'self'") >= 0) {
@@ -771,28 +771,6 @@ async function processStylesheetResponse(response, request, event) {
   const newResponse = new Response(body, response);
 
   return newResponse;
-}
-
-/**
- * Handle a proxied stylesheet request.
- * 
- * @param {*} url The URL to proxy
- * @param {*} request The original request (to copy parameters from)
- * @param {Event} event - The original event
- */
-async function proxyStylesheet(url, request, event) {
-  let css = await fetchGoogleFontsCSS(url, request, event);
-  if (css) {
-    const responseInit = {headers: {
-      "Content-Type": "text/css; charset=utf-8",
-      "Cache-Control": "private, max-age=86400, stale-while-revalidate=604800"
-    }};
-    const newResponse = new Response(css, responseInit);
-    return newResponse;
-  } else {
-    // Do a straight-through proxy as fallback
-    return proxyRequest(url, request);
-  }
 }
 
 /**
@@ -1051,7 +1029,7 @@ async function processHtmlResponse(response, request, event) {
       cspRule = match[0];
     } else {
       const defaultRegex = /default-src[^;]*/gmi;
-      let match = defaultRegex.exec(csp);
+      match = defaultRegex.exec(csp);
       if (match !== null) {
         cspRule = match[0];
       }
@@ -1063,6 +1041,26 @@ async function processHtmlResponse(response, request, event) {
         cspRules['style'] = cspRule;
       } else {
         cspRules['style'] = cspRule;
+      }
+    }
+    const scriptRegex = /script-src[^;]*/gmi;
+    match = scriptRegex.exec(csp);
+    if (match !== null) {
+      cspRule = match[0];
+    } else {
+      const defaultRegex = /default-src[^;]*/gmi;
+      match = defaultRegex.exec(csp);
+      if (match !== null) {
+        cspRule = match[0];
+      }
+    }
+    if (cspRule !== null) {
+      if (cspRule.indexOf("'unsafe-inline'") >= 0) {
+        // Do nothing. This is the same as not using CSP for scripts.
+      } else if (cspRule.indexOf("'self'") >= 0) {
+        cspRules['script'] = cspRule;
+      } else {
+        cspRules['script'] = cspRule;
       }
     }
   }
