@@ -26,6 +26,7 @@ async function processRequest(request, event, requestedHost, originUrl) {
   // Proxy the request using the host from the x-Host header
   let init = {
     method: request.method,
+    redirect: "manual",
     headers: [...request.headers]
   };
   const clientAddr = request.headers.get('cf-connecting-ip');

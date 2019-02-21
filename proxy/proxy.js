@@ -18,6 +18,7 @@ async function processRequest(request, event) {
   // Proxy the request
   let init = {
     method: request.method,
+    redirect: "manual",
     headers: [...request.headers]
   };
   const clientAddr = request.headers.get('cf-connecting-ip');

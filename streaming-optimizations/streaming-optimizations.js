@@ -659,7 +659,7 @@ async function hashContent(originalUrl, url, request) {
       if (clientAddr) {
         headers['X-Forwarded-For'] = clientAddr;
       }
-      const response = await fetch(url, {headers: headers});
+      const response = await fetch(url, {redirect: "manual", headers: headers});
       let content = await response.arrayBuffer();
       if (content) {
         const hashBuffer = await crypto.subtle.digest('SHA-1', content);
@@ -846,7 +846,7 @@ async function fetchGoogleFontsCSS(url, request, event) {
     }
 
     try {
-      const response = await fetch(url, {headers: headers});
+      const response = await fetch(url, {redirect: "manual", headers: headers});
       if (response && response.status === 200) {
         fontCSS = await response.text();
 
@@ -941,6 +941,7 @@ const VALID_CHARSETS = ['utf-8', 'utf8', 'iso-8859-1', 'us-ascii'];
 async function proxyRequest(url, request) {
   let init = {
     method: request.method,
+    redirect: "manual",
     headers: {}
   };
   // see if it is a cache-extended hashed URL
