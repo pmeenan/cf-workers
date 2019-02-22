@@ -34,7 +34,7 @@ addEventListener("fetch", event => {
     if (event.request.method === 'GET' && isProxyRequest(url)) {
       // Pass the requests through to the origin server
       // (through the underlying request cache and filtering headers).
-      event.respondWith(proxyRequest('https:/' + url.pathname + url.search, csp.request));
+      event.respondWith(proxyRequest('https:/' + url.pathname + url.search, event.request));
     } else {
       event.respondWith(processRequest(event.request, event));
     }
