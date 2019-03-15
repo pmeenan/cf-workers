@@ -319,7 +319,7 @@ function shouldBypassEdgeCache(request, response) {
   return bypassCache;
 }
 
-const CACHE_HEADERS = ['Cache-Control', 'Expires', 'Pragma'];
+const CACHE_HEADERS = ['Cache-Control', 'Expires', 'Pragma', 'ETag', 'Vary'];
 
 /**
  * Check for cached HTML GET requests.
