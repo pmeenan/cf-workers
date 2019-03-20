@@ -140,7 +140,6 @@ PROXY_DOMAINS = [
  * @param {bool} cspRules - Content-Security-Policy rules
 */
 async function modifyHtmlChunk(content, request, event, cspRules) {
-
   // Call out to the individual optimizations
   if (ENABLE_GOOGLE_FONTS)
     content = await optimizeGoogleFonts(content, request, event, cspRules);
@@ -859,7 +858,7 @@ async function fetchGoogleFontsCSS(url, request, event) {
         fontCSS = await response.text();
 
         // Rewrite all of the font URLs to come through the worker
-        fontCSS = fontCSS.replace(/(https?:)?\/\/fonts\.gstatic\.com\//mgi, PROXY_PREFIX + '/fonts.gstatic.com/');
+        fontCSS = fontCSS.replace(/(https?:)?\/\/fonts\.gstatic\.com\//mgi, PROXY_PREFIX + 'fonts.gstatic.com/');
 
         // Add the css info to the font cache
         try {
