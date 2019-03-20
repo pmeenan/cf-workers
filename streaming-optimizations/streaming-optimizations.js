@@ -35,20 +35,20 @@ const PROXY_PREFIX = '/perf-cgi/3pp/';
 addEventListener("fetch", event => {
   // Fail-safe in case of an unhandled exception
   event.passThroughOnException();
-  const accept = event.request.headers.get('Accept');
-  let isImage = false;
-  if (accept && accept.indexOf('image/*') !== -1) {
-    isImage = true;
-  }
-  // Bypass processing for image requests (for most browsers, Firefox doesn't include image/* on the accept)
-  if (!isImage) {
-    const url = new URL(event.request.url);
-    const proxiedUrl = isProxyRequest(url);
-    if (proxiedUrl) {
-      // Pass the requests through to the origin server
-      // (through the underlying request cache and filtering headers).
-      event.respondWith(proxyRequest(proxiedUrl, event.request));
-    } else {
+  const url = new URL(event.request.url);
+  const proxiedUrl = isProxyRequest(url);
+  if (proxiedUrl) {
+    // Pass the requests through to the origin server
+    // (through the underlying request cache and filtering headers).
+    event.respondWith(proxyRequest(proxiedUrl, event.request));
+  } else {
+    // Bypass processing for image requests (for most browsers, Firefox doesn't include image/* on the accept)
+    const accept = event.request.headers.get('Accept');
+    let isImage = false;
+    if (accept && accept.indexOf('image/*') !== -1) {
+      isImage = true;
+    }
+    if (!isImage) {
       event.respondWith(processRequest(event.request, event));
     }
   }
