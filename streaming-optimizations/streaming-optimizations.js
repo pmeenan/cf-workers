@@ -127,6 +127,7 @@ const STYLESHEET_URLS = [
 PROXY_DOMAINS = [
   'cdn\\.shopify\\.com',
   'cdn[\\d]*\\.bigcommerce\\.com',
+  'secure\\.gravatar\\.com',
   'i[\\d]+\\.wp\\.com',
   'static[\\d]*\\.squarespace\\.com'
 ];
