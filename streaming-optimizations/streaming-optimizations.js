@@ -172,6 +172,7 @@ function isProxyRequest(url) {
       path = path.substring(6);
     }
     proxiedUrl = protocol + '//' + path + url.search;
+    /*
     // Make sure the proxied URL is for a prefix or domain that we support proxying
     let valid = false;
     url = new URL(proxiedUrl);
@@ -208,6 +209,7 @@ function isProxyRequest(url) {
     if (!valid) {
       proxiedUrl = null;
     }
+    */
   }
   return proxiedUrl;
 }
