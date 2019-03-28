@@ -172,46 +172,55 @@ function isProxyRequest(url) {
       path = path.substring(6);
     }
     proxiedUrl = protocol + '//' + path + url.search;
-    /*
-    // Make sure the proxied URL is for a prefix or domain that we support proxying
-    let valid = false;
-    url = new URL(proxiedUrl);
-    if (ENABLE_GOOGLE_FONTS && url.hostname === 'fonts.gstatic.com') {
-      valid = true;
-    } else {
-      if (ENABLE_PROXY_THIRD_PARTY) {
-        const path = '/' + url.hostname + url.pathname + url.search;
-        for (let prefix of SCRIPT_URLS) {
+    if (!shouldProxyUrl(proxiedUrl)) {
+      proxiedUrl = null;
+    }
+  }
+  return proxiedUrl;
+}
+
+/**
+ * Determine if the given URL should be proxied
+ * @param {String} candidateUrl - URL to check
+ * @returns {Bool} true if the URL is a URL we would proxy (matching prefix or domain regex)
+ */
+function shouldProxyUrl(candidateUrl) {
+  let valid = false;
+  url = new URL(candidateUrl);
+  if (ENABLE_GOOGLE_FONTS && url.hostname === 'fonts.gstatic.com') {
+    valid = true;
+  } else {
+    // Check the 3rd-party scripts list
+    if (ENABLE_PROXY_THIRD_PARTY) {
+      const path = '/' + url.hostname + url.pathname + url.search;
+      for (let prefix of SCRIPT_URLS) {
+        if (path.startsWith(prefix)) {
+          valid = true;
+          break;
+        }
+      }
+      // Check the 3rd-party stylesheets list
+      if (!valid) {
+        for (let prefix of STYLESHEET_URLS) {
           if (path.startsWith(prefix)) {
             valid = true;
             break;
           }
         }
-        if (!valid) {
-          for (let prefix of STYLESHEET_URLS) {
-            if (path.startsWith(prefix)) {
-              valid = true;
-              break;
-            }
-          }
-        }
       }
-      if (!valid && ENABLE_REWRITE_DOMAINS) {
-        for (let pattern of PROXY_DOMAINS) {
-          let regex = new RegExp('(https?:)?\/\/' + pattern + '\/');
-          if (proxiedUrl.match(regex)) {
-            valid = true;
-            break;
-          }
+    }
+    // Check the domain rewrite list
+    if (!valid && ENABLE_REWRITE_DOMAINS) {
+      for (let pattern of PROXY_DOMAINS) {
+        let regex = new RegExp('(https?:)?\/\/' + pattern + '\/');
+        if (candidateUrl.match(regex)) {
+          valid = true;
+          break;
         }
       }
     }
-    if (!valid) {
-      proxiedUrl = null;
-    }
-    */
   }
-  return proxiedUrl;
+  return valid;
 }
 
 /**
@@ -692,12 +701,14 @@ function rewriteStylesheetUrls(proxied, url, content) {
       let proxyUrl = null;
       // only operate on absolute urls
       if (originalUrl.startsWith('//') && !originalUrl.startsWith('//' + cssUrl.hostname + '/')) {
-        proxyUrl = PROXY_PREFIX + originalUrl.substr(2);
+        if (shouldProxyUrl('https:' + originalUrl)) {
+          proxyUrl = PROXY_PREFIX + originalUrl.substr(2);
+        }
       } else if (proxied && originalUrl.startsWith('/')) {
         proxyUrl = PROXY_PREFIX + cssUrl.hostname + originalUrl;
       } else if (originalUrl.indexOf(cssUrl.hostname) === -1) {
         let offset = originalUrl.indexOf('://');
-        if (offset >= 0) {
+        if (offset >= 0 && shouldProxyUrl(originalUrl)) {
           proxyUrl = PROXY_PREFIX + originalUrl.substring(0, offset) + '/' + originalUrl.substr(offset + 3);
         }
       }
