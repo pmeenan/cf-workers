@@ -927,7 +927,7 @@ function getCacheKey(userAgent) {
 
   // Detect Safari and Webview next
   const webkitRegex = /\s+AppleWebKit\/(\d+)/mgi;
-  match = webkitRegex.exec(userAgent.match);
+  match = webkitRegex.exec(userAgent);
   if (match) {
     return 'WebKit' + match[1] + os + mobile;
   }
